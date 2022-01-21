@@ -29,46 +29,47 @@ import qualified Streamly.Internal.FileSystem.File as File
 import qualified Streamly.Internal.Data.Array.Foreign as Foreign
 import           System.IO.Unsafe(unsafePerformIO)
 
-type Judy = J.JudyL Word32
-
 
 -- | Store a judy array into a file
-encodeJudy :: Judy -> FilePath -> IO ()
+encodeJudy :: JE a => J.JudyL a -> FilePath -> IO ()
 encodeJudy j target = do
-    fr <- J.freeze j
-    streamJudy fr
-      & Stream.map encodeKeyValue
+    streamJudy j
+      & Stream.mapM encodeKeyValue
       & Stream.map Foreign.fromList
       & File.fromChunks target
-  where encodeKeyValue (key,value) = (wordToWord8 key) ++ (word32ToWord8 (fromIntegral value))
+  where encodeKeyValue :: JE a => (J.Key,a) -> IO [Word8]
+        encodeKeyValue (key,value) = do w <- toWord value
+                                        return ((wordToWord8 key) ++ (word32ToWord8 w))
 
 
 -- | Load a judy array from file
-decodeJudy :: FilePath -> IO Judy
+decodeJudy :: JE a => FilePath -> IO (J.JudyL a)
 decodeJudy file =
     File.toChunks file
   & Stream.take 12
   & Stream.map (readLine . B.pack . Foreign.toList)
   & Stream.foldlM' ins J.new
- where ins :: Judy -> (Word64, Word32) -> IO Judy
-       ins j (key,value) = do J.insert (fromIntegral key) value j
+ where ins :: JE a => J.JudyL a -> (Word64, Word) -> IO (J.JudyL a)
+       ins j (key,value) = do v <- fromWord value
+                              J.insert (fromIntegral key) v j
                               return j
-       readLine :: B.ByteString -> (Word64, Word32)
+       readLine :: B.ByteString -> (Word64, Word)
        readLine word8s = (key, value)
          where key = word64 (B.take 8 word8s)
-               value = word32 (B.take 4 (B.drop 8 word8s))
+               value = fromIntegral (word32 (B.take 4 (B.drop 8 word8s)))
 
 
 -- | Load a judy array from a bytestring
-decodeJudy2 :: B.ByteString -> IO Judy
+decodeJudy2 :: JE a => B.ByteString -> IO (J.JudyL a)
 decodeJudy2 bs = do n <- J.new
                     toJudy bs n
-  where toJudy :: B.ByteString -> Judy -> IO Judy
+  where toJudy :: JE a => B.ByteString -> J.JudyL a -> IO (J.JudyL a)
         toJudy b j | B.null b  = return j
-                   | otherwise = do J.insert (fromIntegral key) value j
+                   | otherwise = do v <- fromWord value
+                                    J.insert (fromIntegral key) v j
                                     toJudy (B.drop 12 b) j
           where key = word64 (B.take 8 b)
-                value = word32 (B.take 4 (B.drop 8 b))
+                value = fromIntegral (word32 (B.take 4 (B.drop 8 b)))
 
 
 -----------------------------------------------------------------------------------------
@@ -76,15 +77,15 @@ decodeJudy2 bs = do n <- J.new
 -- | Converting a judy array to a list (with J.toList j) is problematic when the array 
 --   is big an needs a lot of memory. It is more reasonable to stream the judy array when 
 --   (for example) writing to disk
-streamJudy :: JE a => J.JudyImmutable a -> Stream.SerialT IO (J.Key,a)
-streamJudy (J.JudyImmutable m) = Stream.iterateM next initial
-                                & Stream.takeWhile isJust
-                                & Stream.map fromJust
+streamJudy :: JE a => J.JudyL a -> Stream.SerialT IO (J.Key,a)
+streamJudy j = Stream.iterateM next initial
+                 & Stream.takeWhile isJust
+                 & Stream.map fromJust
   where
     initial :: JE a => IO (Maybe (J.Key,a))
     initial =
 #if !defined(UNSAFE)
-      withMVar (unJudyL m) $ \m_ ->
+      withMVar (unJudyL j) $ \m_ ->
         withForeignPtr m_ $ \p -> do
 #else
         withForeignPtr (unJudyL m)  $ \p -> do
@@ -104,7 +105,7 @@ streamJudy (J.JudyImmutable m) = Stream.iterateM next initial
       Nothing -> return Nothing
       Just (k0,v0)  -> do
 #if !defined(UNSAFE)
-        withMVar (unJudyL m) $ \m_ ->
+        withMVar (unJudyL j) $ \m_ ->
           withForeignPtr m_ $ \p -> do
 #else
           withForeignPtr (unJudyL m)  $ \p -> do
