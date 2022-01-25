@@ -46,7 +46,7 @@ extra-deps:
 - streamly-0.8.1
 - unicode-data-0.2.0
 - git: https://github.com/tkvogt/judy.git
-  commit: 433407fe3c55f2c94b3eb838f6db47eb759e4f58
+  commit: 2819a6daee11f0bea12fe8043e0c28ae2db723fa
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

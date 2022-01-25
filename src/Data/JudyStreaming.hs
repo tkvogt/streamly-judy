@@ -17,6 +17,7 @@ import qualified Data.ByteString as B
 import Data.Function((&))
 import Data.Judy(JE(..), JudyL(..))
 import qualified Data.Judy as J
+import qualified Data.Judy.Internal as J
 import Data.Maybe(isJust, fromJust)
 import qualified Streamly.Prelude as Stream
 import Foreign hiding (new)
@@ -85,7 +86,7 @@ streamJudy j = Stream.iterateM next initial
     initial :: JE a => IO (Maybe (J.Key,a))
     initial =
 #if !defined(UNSAFE)
-      withMVar (unJudyL j) $ \m_ ->
+      withMVar (J.unJudyL j) $ \m_ ->
         withForeignPtr m_ $ \p -> do
 #else
         withForeignPtr (unJudyL m)  $ \p -> do
@@ -105,7 +106,7 @@ streamJudy j = Stream.iterateM next initial
       Nothing -> return Nothing
       Just (k0,v0)  -> do
 #if !defined(UNSAFE)
-        withMVar (unJudyL j) $ \m_ ->
+        withMVar (J.unJudyL j) $ \m_ ->
           withForeignPtr m_ $ \p -> do
 #else
           withForeignPtr (unJudyL m)  $ \p -> do
