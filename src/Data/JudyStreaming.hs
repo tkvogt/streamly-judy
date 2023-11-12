@@ -19,15 +19,16 @@ import Data.Judy(JE(..), JudyL(..))
 import qualified Data.Judy as J
 import qualified Data.Judy.Internal as J
 import Data.Maybe(isJust, fromJust)
-import qualified Streamly.Prelude as Stream
+import qualified Streamly.Data.Fold as Fold
 import Foreign hiding (new)
-import Foreign.C.Types
 import Foreign.ForeignPtr()
-import GHC.Ptr
 import GHC.Word(Word(..))
 import Network.ByteOrder(word32,word64)
 import qualified Streamly.Internal.FileSystem.File as File
-import qualified Streamly.Internal.Data.Array.Foreign as Foreign
+import qualified Streamly.Data.Stream.Prelude as Stream
+import qualified Streamly.Data.Stream as Str
+import Streamly.Data.Stream.Prelude(Stream)
+import qualified Streamly.Internal.Data.Array.Type as Array
 import           System.IO.Unsafe(unsafePerformIO)
 
 
@@ -36,21 +37,34 @@ encodeJudy :: JE a => J.JudyL a -> FilePath -> IO ()
 encodeJudy j target = do
     streamJudy j
       & Stream.mapM encodeKeyValue
-      & Stream.map Foreign.fromList
+      & fmap Array.fromList
       & File.fromChunks target
   where encodeKeyValue :: JE a => (J.Key,a) -> IO [Word8]
         encodeKeyValue (key,value) = do w <- toWord value
                                         return ((wordToWord8 key) ++ (word32ToWord8 w))
 
+wordToWord8 :: Word -> [Word8]
+wordToWord8 w = map (extractWord8 w) [7,6,5,4,3,2,1,0]
+
+word32ToWord8 :: Word -> [Word8]
+word32ToWord8 w = map (extractWord8 w) [3,2,1,0]
+
+extractWord8 :: Word -> Int -> Word8
+extractWord8 w i
+    = unsafePerformIO . allocaBytes 1 $ \p -> do
+        pokeByteOff p 0 w
+        peek (castPtr (plusPtr p i))
 
 -- | Load a judy array from file
 decodeJudy :: JE a => FilePath -> IO (J.JudyL a)
 decodeJudy file =
-    File.toChunks file
+    File.readChunks file
   & Stream.take 12
-  & Stream.map (readLine . B.pack . Foreign.toList)
-  & Stream.foldlM' ins J.new
- where ins :: JE a => J.JudyL a -> (Word64, Word) -> IO (J.JudyL a)
+  & fmap f
+  & Stream.fold (Fold.foldlM' ins J.new)
+ where f :: Array.Array Word8 -> (Word64, Word)
+       f = readLine . B.pack . Array.toList
+       ins :: JE a => J.JudyL a -> (Word64, Word) -> IO (J.JudyL a)
        ins j (key,value) = do v <- fromWord value
                               J.insert (fromIntegral key) v j
                               return j
@@ -75,13 +89,14 @@ decodeJudy2 bs = do n <- J.new
 
 -----------------------------------------------------------------------------------------
 -- Helpers
+
 -- | Converting a judy array to a list (with J.toList j) is problematic when the array 
---   is big an needs a lot of memory. It is more reasonable to stream the judy array when 
+--   is big and needs a lot of memory. It is more reasonable to stream the judy array when 
 --   (for example) writing to disk
-streamJudy :: JE a => J.JudyL a -> Stream.SerialT IO (J.Key,a)
+streamJudy :: JE a => J.JudyL a -> Stream IO (J.Key,a)
 streamJudy j = Stream.iterateM next initial
                  & Stream.takeWhile isJust
-                 & Stream.map fromJust
+                 & fmap fromJust
   where
     initial :: JE a => IO (Maybe (J.Key,a))
     initial =
@@ -122,16 +137,3 @@ streamJudy j = Stream.iterateM next initial
                        k <- peek k_ptr
                        v <- fromWord =<< peek v_ptr
                        return (Just (k,v))
-
-wordToWord8 :: Word -> [Word8]
-wordToWord8 w = map (extractWord8 w) [7,6,5,4,3,2,1,0]
-
-word32ToWord8 :: Word -> [Word8]
-word32ToWord8 w = map (extractWord8 w) [3,2,1,0]
-
-extractWord8 :: Word -> Int -> Word8
-extractWord8 w i
-    = unsafePerformIO . allocaBytes 1 $ \p -> do
-        pokeByteOff p 0 w
-        peek (castPtr (plusPtr p i))
-
